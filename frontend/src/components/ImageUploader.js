@@ -3,6 +3,7 @@ import { Card, Button, Form } from "react-bootstrap";
 
 const ImageUploader = ({ onFileUpload, imageUrl }) => {
   const [dragActive, setDragActive] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
   const inputRef = useRef(null);
 
   const handleDrag = (e) => {
@@ -43,10 +44,34 @@ const ImageUploader = ({ onFileUpload, imageUrl }) => {
       {imageUrl && (
         <div
           className="original-image-container mb-4"
-          style={{ maxWidth: "400px" }}
+          style={{
+            maxWidth: "400px",
+            perspective: "1000px",
+          }}
+          onMouseEnter={() => setIsHovered(true)}
+          onMouseLeave={() => setIsHovered(false)}
         >
           <h5 className="mb-3 text-center">Original Image</h5>
-          <div className="text-center">
+          <div
+            className="text-center"
+            style={{
+              transform: isHovered
+                ? "rotateY(5deg) rotateX(5deg)"
+                : "rotateY(0deg) rotateX(0deg)",
+              transition: "transform 0.3s ease",
+              transformStyle: "preserve-3d",
+              boxShadow: isHovered
+                ? "rgba(0, 0, 0, 0.1) -5px 5px 10px, rgba(0, 0, 0, 0.07) -15px 15px 20px"
+                : "rgba(0, 0, 0, 0.1) 0px 4px 12px, rgba(0, 0, 0, 0.05) 0px 1px 3px",
+              borderRadius: "8px",
+              padding: "10px",
+              background: "#fff",
+              position: "relative",
+              borderTop: "1px solid rgba(255,255,255,0.5)",
+              borderLeft: "1px solid rgba(255,255,255,0.5)",
+              backdropFilter: "blur(5px)",
+            }}
+          >
             <img
               src={imageUrl}
               alt="Original"
@@ -56,6 +81,8 @@ const ImageUploader = ({ onFileUpload, imageUrl }) => {
                 maxWidth: "100%",
                 objectFit: "contain",
                 boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
+                transform: "translateZ(20px)",
+                transition: "transform 0.3s ease",
               }}
             />
           </div>
@@ -70,20 +97,34 @@ const ImageUploader = ({ onFileUpload, imageUrl }) => {
         onDragOver={handleDrag}
         onDrop={handleDrop}
         style={{
-          border: "2px dashed #ccc",
-          borderRadius: "5px",
+          border: dragActive
+            ? "2px dashed var(--dark-blue)"
+            : "2px dashed var(--light-blue)",
+          borderRadius: "12px",
           padding: "40px 20px",
           textAlign: "center",
           cursor: "pointer",
-          background: dragActive ? "#f0f8ff" : "#f8f9fa",
+          background: dragActive ? "rgba(142, 202, 230, 0.1)" : "#f8f9fa",
           transition: "all 0.3s ease",
           width: "100%",
           maxWidth: "500px",
           margin: "0 auto",
+          perspective: "1000px",
+          transformStyle: "preserve-3d",
+          boxShadow: dragActive
+            ? "rgba(0, 0, 0, 0.1) 0px 10px 15px -3px, rgba(0, 0, 0, 0.05) 0px 4px 6px -2px"
+            : "rgba(0, 0, 0, 0.1) 0px 4px 12px, rgba(0, 0, 0, 0.05) 0px 1px 3px",
+          transform: dragActive ? "translateY(-5px)" : "translateY(0)",
         }}
         onClick={onButtonClick}
       >
-        <div className="upload-icon mb-4">
+        <div
+          className="upload-icon mb-4"
+          style={{
+            transform: dragActive ? "translateZ(30px)" : "translateZ(0)",
+            transition: "transform 0.3s ease",
+          }}
+        >
           <svg
             width="50"
             height="50"
@@ -91,7 +132,12 @@ const ImageUploader = ({ onFileUpload, imageUrl }) => {
             stroke="currentColor"
             viewBox="0 0 24 24"
             xmlns="http://www.w3.org/2000/svg"
-            style={{ color: "#0d6efd" }}
+            style={{
+              color: "var(--light-blue)",
+              filter: dragActive
+                ? "drop-shadow(0 2px 5px rgba(0,0,0,0.2))"
+                : "none",
+            }}
           >
             <path
               strokeLinecap="round"
@@ -101,10 +147,24 @@ const ImageUploader = ({ onFileUpload, imageUrl }) => {
             />
           </svg>
         </div>
-        <p className="mb-2">
+        <p
+          className="mb-2"
+          style={{
+            transform: dragActive ? "translateZ(20px)" : "translateZ(0)",
+            transition: "transform 0.3s ease",
+            fontWeight: dragActive ? "500" : "normal",
+            color: "var(--primary-black)",
+          }}
+        >
           Drag and drop your image here, or click to select
         </p>
-        <small className="text-muted d-block mb-4">
+        <small
+          className="text-muted d-block mb-4"
+          style={{
+            transform: dragActive ? "translateZ(15px)" : "translateZ(0)",
+            transition: "transform 0.3s ease",
+          }}
+        >
           Supported formats: JPG, JPEG, PNG
         </small>
 
@@ -122,6 +182,11 @@ const ImageUploader = ({ onFileUpload, imageUrl }) => {
             borderRadius: "4px",
             padding: "8px 20px",
             fontSize: "16px",
+            transform: dragActive ? "translateZ(25px)" : "translateZ(0)",
+            transition: "transform 0.3s ease, box-shadow 0.3s ease",
+            boxShadow: dragActive
+              ? "0 8px 16px rgba(0,0,0,0.1)"
+              : "0 4px 6px rgba(0,0,0,0.1)",
           }}
           onClick={(e) => {
             e.stopPropagation();

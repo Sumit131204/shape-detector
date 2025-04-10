@@ -1,82 +1,145 @@
-.action-buttons {
-  display: flex;
-  justify-content: center;
-  margin-bottom: 1.5rem;
+/* Custom color scheme */
+:root {
+  --primary-black: #222831;
+  --light-blue: #8ecae6;
+  --dark-blue: #4a8db7;
+  --text-white: #f5f5f5;
+  --bg-light: #f8f9fa;
 }
 
-.action-buttons .btn {
-  min-width: 150px;
-  border-radius: 8px;
-  transition: all 0.3s ease;
+/* Override Bootstrap primary colors */
+.bg-primary {
+  background-color: var(--primary-black) !important;
+}
+
+.btn-primary {
+  background-color: var(--light-blue) !important;
+  border-color: var(--light-blue) !important;
+  color: var(--primary-black) !important;
   font-weight: 500;
 }
 
-.action-buttons .btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+.btn-primary:hover,
+.btn-primary:focus,
+.btn-primary:active {
+  background-color: var(--dark-blue) !important;
+  border-color: var(--dark-blue) !important;
+  color: white !important;
 }
 
-.info-panel {
-  background-color: #f8f9fa;
-  border-radius: 10px;
-  padding: 20px;
-  margin-top: 20px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+.btn-outline-primary {
+  color: var(--light-blue) !important;
+  border-color: var(--light-blue) !important;
 }
 
-.info-panel h3 {
-  color: #0d6efd;
-  margin-bottom: 15px;
+.btn-outline-primary:hover,
+.btn-outline-primary:focus,
+.btn-outline-primary:active {
+  background-color: var(--light-blue) !important;
+  color: var(--primary-black) !important;
 }
 
-.info-panel ul {
-  padding-left: 20px;
+.btn-success {
+  background-color: var(--light-blue) !important;
+  border-color: var(--dark-blue) !important;
+  color: var(--primary-black) !important;
 }
 
-.info-panel li {
-  margin-bottom: 10px;
+.btn-success:hover,
+.btn-success:focus,
+.btn-success:active {
+  background-color: var(--dark-blue) !important;
+  border-color: var(--dark-blue) !important;
 }
 
+.btn-outline-success {
+  color: var(--dark-blue) !important;
+  border-color: var(--dark-blue) !important;
+}
+
+.btn-outline-success:hover,
+.btn-outline-success:focus,
+.btn-outline-success:active {
+  background-color: var(--dark-blue) !important;
+  color: white !important;
+}
+
+/* Card styling */
 .card {
-  border-radius: 15px;
+  border-radius: 10px;
   overflow: hidden;
-  border: none;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1) !important;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
 
 .card-header {
-  padding: 1.25rem;
-  border-bottom: none;
-}
-
-.card-footer {
-  background-color: white;
-  border-top: 1px solid #f0f0f0;
-  padding: 1rem;
-}
-
-.image-container {
-  border-radius: 10px;
-  overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  margin-bottom: 20px;
-}
-
-.image-container img {
-  width: 100%;
-  height: auto;
-  object-fit: contain;
-}
-
-.image-title {
-  background-color: #f8f9fa;
-  color: #495057;
-  padding: 0.75rem;
-  border-bottom: 1px solid #e9ecef;
-  font-size: 1rem;
+  background-color: var(--light-blue) !important;
+  color: var(--primary-black) !important;
   font-weight: 500;
 }
 
+.card-footer {
+  background-color: var(--bg-light);
+}
+
+/* Image upload area styling */
+.upload-container {
+  border-color: var(--light-blue) !important;
+}
+
+.upload-container svg {
+  color: var(--light-blue) !important;
+}
+
+.upload-container.drag-active {
+  border-color: var(--dark-blue) !important;
+  background-color: rgba(142, 202, 230, 0.1) !important;
+}
+
+/* Image container styling */
+.image-display-container img,
+.original-image-container img {
+  border: 1px solid var(--light-blue);
+}
+
+/* Badge styling */
+.badge {
+  font-weight: 500;
+}
+
+/* Alert styling */
+.alert-danger {
+  border-left: 4px solid #dc3545;
+}
+
+.alert-warning {
+  border-left: 4px solid #ffc107;
+}
+
+/* Make the spinner match the new color scheme */
+.spinner-border {
+  color: var(--light-blue) !important;
+}
+
+/* Custom styling for hover effects */
+.btn {
+  transition: all 0.3s ease;
+}
+
+.btn:hover {
+  transform: translateY(-2px);
+}
+
+/* Debug section styling */
+details summary {
+  cursor: pointer;
+  color: var(--dark-blue);
+}
+
+details summary:hover {
+  color: var(--primary-black);
+}
+
+/* Media query for better mobile display */
 @media (max-width: 768px) {
   .action-buttons {
     flex-direction: column;
@@ -84,8 +147,7 @@
   }
 
   .action-buttons .btn {
-    margin-right: 0 !important;
-    margin-bottom: 10px;
+    margin: 5px 0;
     width: 100%;
   }
 }

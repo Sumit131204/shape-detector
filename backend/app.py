@@ -641,21 +641,39 @@ def detect_shape():
         return jsonify({'error': 'No filename provided'}), 400
     
     filename = data['filename']
+    print(f"[DEBUG] Shape detection requested for file: {filename}")
     
     try:
-        # Load the image (should be background-removed at this point)
-        img_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{filename}")
+        # Original image path
+        original_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         
-        # Ensure we're using PNG format which preserves transparency
-        if not img_path.endswith('.png'):
-            img_path = f"{os.path.splitext(img_path)[0]}.png"
+        # Generate output paths for background-removed image
+        bg_removed_path = os.path.join(app.config['UPLOAD_FOLDER'], f"nobg_{filename}")
+        if not bg_removed_path.lower().endswith('.png'):
+            bg_removed_path = bg_removed_path.rsplit('.', 1)[0] + '.png'
+        
+        # Check if original file exists
+        if not os.path.exists(original_path):
+            print(f"[ERROR] Original file not found: {original_path}")
+            return jsonify({'error': f'File not found: {original_path}'}), 404
+        
+        # Remove background and save as PNG
+        print(f"[DEBUG] Removing background from {original_path}")
+        remove_background(original_path, bg_removed_path)
+        
+        # Check if background removal was successful
+        if not os.path.exists(bg_removed_path):
+            print(f"[ERROR] Failed to remove background: {bg_removed_path}")
+            return jsonify({'error': 'Failed to process image'}), 500
             
-        # Check if the file exists
-        if not os.path.exists(img_path):
-            return jsonify({'error': f'File not found: {img_path}'}), 404
-            
-        # Read the image
-        img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
+        # Read the background-removed image
+        img = cv2.imread(bg_removed_path, cv2.IMREAD_UNCHANGED)
+        
+        if img is None:
+            print(f"[ERROR] Failed to read image after background removal: {bg_removed_path}")
+            return jsonify({'error': 'Failed to read processed image'}), 500
+        
+        print(f"[DEBUG] Successfully loaded image with shape: {img.shape}")
         
         # Resize image while maintaining aspect ratio
         max_dimension = 1000  # Increase from 800 to 1000 for better accuracy
@@ -670,11 +688,13 @@ def detect_shape():
             new_h = int(h * (max_dimension / w))
             
         # Resize image
+        print(f"[DEBUG] Resizing image from {w}x{h} to {new_w}x{new_h}")
         img_resized = cv2.resize(img, (new_w, new_h))
         
         # Create a visualization image that we'll draw on
         # Convert RGBA to RGB for visualization if necessary
-        if img_resized.shape[2] == 4:  # RGBA
+        if len(img_resized.shape) > 2 and img_resized.shape[2] == 4:  # RGBA
+            print("[DEBUG] Converting RGBA image to RGB for visualization")
             # Create a white background
             viz_img = np.ones((new_h, new_w, 3), dtype=np.uint8) * 255
             
@@ -688,21 +708,27 @@ def detect_shape():
             # Copy RGB values from the original image to the viz image where alpha > 0
             viz_img[alpha_mask] = rgb[alpha_mask]
         else:
+            print("[DEBUG] Image is already in RGB format")
             viz_img = img_resized.copy()
         
         # Create a preprocessed image for contour detection
+        print("[DEBUG] Preprocessing image for contour detection")
         processed = preprocess_image_for_contours(img_resized)
         
         # Find contours in the processed image
+        print("[DEBUG] Finding contours")
         contours, _ = cv2.findContours(processed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        print(f"[DEBUG] Found {len(contours)} contours")
         
         # Find the main shape (largest contour)
         main_contour = find_main_shape(contours)
         
         if main_contour is None:
+            print("[ERROR] No main shape detected")
             return jsonify({'error': 'No shape detected'}), 400
             
         # Smooth the contour to reduce noise
+        print("[DEBUG] Smoothing contour")
         smoothed_contour = smooth_contour(main_contour)
         
         # Initialize shape detector
@@ -710,9 +736,12 @@ def detect_shape():
         
         # Detect the shape
         shape = sd.detect(smoothed_contour)
+        print(f"[DEBUG] Detected shape: {shape}")
         
         # Calculate shape dimensions
+        print("[DEBUG] Calculating shape dimensions")
         measurements = calculate_shape_size(shape, smoothed_contour, new_w)
+        print(f"[DEBUG] Measurements: {measurements}")
         
         # Draw the contour on the visualization image
         cv2.drawContours(viz_img, [smoothed_contour], -1, (0, 255, 0), 2)
@@ -726,6 +755,7 @@ def detect_shape():
             cx, cy = new_w // 2, new_h // 2
         
         # Add shape label
+        print(f"[DEBUG] Adding visual elements to output image")
         cv2.putText(viz_img, shape.capitalize(), (cx - 20, cy - 20),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
         
@@ -807,20 +837,34 @@ def detect_shape():
                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
         
         # Save the visualization image
+        print(f"[DEBUG] Saving visualization image")
         viz_path = os.path.join(app.config['UPLOAD_FOLDER'], f"viz_{filename}")
         cv2.imwrite(viz_path, viz_img)
+        print(f"[DEBUG] Visualization saved to: {viz_path}")
         
-        # Create a result object with all the necessary information
-        result = {
+        # Create a shape data object for the response
+        shape_data = {
             'shape': shape,
-            'measurements': measurements,
-            'processed_image': f"/uploads/viz_{filename}"
+            'area_mm2': measurements.get('area_mm2', 0),
+            'dimensions': measurements['dimension_text']
         }
         
-        return jsonify(result)
+        # Add all measurements to the result
+        for key, value in measurements.items():
+            if key != 'dimension_text':
+                shape_data[key] = value
+        
+        # Modify the response to match the frontend's expected format
+        print(f"[DEBUG] Returning successful response with shape: {shape}")
+        return jsonify({
+            'success': True,
+            'shapes': [shape_data],  # Frontend expects 'shapes' array
+            'processedImage': f"/static/uploads/viz_{filename}"
+        })
         
     except Exception as e:
-        app.logger.error(f"Error in shape detection: {str(e)}")
+        error_trace = traceback.format_exc()
+        print(f"[ERROR] Error in shape detection: {str(e)}\n{error_trace}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/detect-size', methods=['POST'])
