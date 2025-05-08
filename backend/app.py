@@ -14,6 +14,7 @@ import pandas as pd  # Add import for pandas to read Excel file
 import time
 import json
 from sklearn.cluster import KMeans
+from enhanced_color_detection import EnhancedColorDetector
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
@@ -26,6 +27,9 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # Limit upload size to 16MB
 
 # Ensure upload directory exists
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# Initialize the enhanced color detector at app startup
+enhanced_color_detector = EnhancedColorDetector()
 
 # Helper function to check allowed file extensions
 def allowed_file(filename):
@@ -367,8 +371,16 @@ def calculate_shape_size(shape, contour, image_width_px):
     
     # Calculate shape-specific measurements
     if shape == "circle":
-        # For circles, use area formula πr²
-        radius_px = perimeter / (2 * math.pi)
+        # For circles, use the min enclosing circle for more accuracy
+        (x, y), radius_px = cv2.minEnclosingCircle(contour)
+        
+        # Also calculate radius from area for comparison
+        radius_from_area_px = math.sqrt(pixel_area / math.pi)
+        
+        # Use the average of the two methods for better accuracy
+        radius_px = (radius_px + radius_from_area_px) / 2
+        
+        # Convert to real-world measurements
         radius_mm = calculate_real_size(radius_px, image_width_px)
         diameter_mm = radius_mm * 2
         area_mm2 = math.pi * (radius_mm ** 2)
@@ -523,11 +535,157 @@ def find_main_shape(contours):
     # Return the largest contour by area
     return max(valid_contours, key=cv2.contourArea)
 
+# Function to detect and improve circular contours
+def optimize_circular_contour(contour):
+    """
+    For circular shapes, optimize the contour for perfect circle detection.
+    
+    Parameters:
+    contour (numpy.ndarray): The original contour
+    
+    Returns:
+    numpy.ndarray: Optimized circular contour or original if not a circle
+    bool: True if the contour is circular, False otherwise
+    """
+    try:
+        # Check if it's circular based on multiple metrics
+        # 1. Calculate circularity metric
+        area = cv2.contourArea(contour)
+        perimeter = cv2.arcLength(contour, True)
+        if perimeter == 0:
+            return contour, False
+            
+        circularity = 4 * np.pi * area / (perimeter * perimeter)
+        
+        # Only proceed if it's potentially a circle (improved threshold)
+        if circularity > 0.75:  # Lowered threshold slightly to catch more circles
+            # Get the minimum enclosing circle
+            (x, y), radius = cv2.minEnclosingCircle(contour)
+            center = (int(x), int(y))
+            radius = int(radius)
+            
+            # Alternative: fit an ellipse and check if it's close to a circle
+            if len(contour) >= 5:  # Need at least 5 points to fit an ellipse
+                ellipse = cv2.fitEllipse(contour)
+                axes = ellipse[1]
+                axes_ratio = min(axes) / max(axes) if max(axes) > 0 else 0
+                
+                # If the ellipse is very circular (axes are similar)
+                if axes_ratio > 0.85:  # Lowered threshold to catch more circles
+                    # Generate a perfect circle with 180 points for ultra-smooth outline
+                    perfect_circle = []
+                    for i in range(180):  # Increased point count for smoother circles
+                        angle = i * 2 * np.pi / 180
+                        px = center[0] + radius * np.cos(angle)
+                        py = center[1] + radius * np.sin(angle)
+                        perfect_circle.append([[int(px), int(py)]])
+                    
+                    return np.array(perfect_circle, dtype=np.int32), True
+            
+            # If ellipse fitting didn't work, still try to make a perfect circle
+            # if circularity is very high
+            if circularity > 0.85:
+                perfect_circle = []
+                for i in range(180):
+                    angle = i * 2 * np.pi / 180
+                    px = center[0] + radius * np.cos(angle)
+                    py = center[1] + radius * np.sin(angle)
+                    perfect_circle.append([[int(px), int(py)]])
+                
+                return np.array(perfect_circle, dtype=np.int32), True
+    except:
+        pass
+        
+    return contour, False
+
+# Function to preprocess the image specifically for circle detection
+def preprocess_for_circle_detection(image):
+    """
+    Apply specialized preprocessing for circle detection.
+    
+    Parameters:
+    image (numpy.ndarray): Input image
+    
+    Returns:
+    numpy.ndarray: Processed binary image
+    """
+    # Convert to grayscale if needed
+    if len(image.shape) > 2:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image.copy()
+        
+    # Apply a slight blur to reduce noise (increased kernel size for better results)
+    blurred = cv2.GaussianBlur(gray, (7, 7), 1.5)
+    
+    # Use Otsu's thresholding for optimal binary image
+    _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+    
+    # Apply morphological operations to clean up the edges
+    kernel = np.ones((5, 5), np.uint8)  # Larger kernel for better shape preservation
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
+    
+    return binary
+
 # Function to smooth contours and remove noise
 def smooth_contour(contour, factor=0.005):
-    """Smooth a contour by approximating it with fewer points."""
+    """
+    Smooth a contour by approximating it with fewer points and applying a rolling average.
+    
+    Parameters:
+    contour (numpy.ndarray): The contour to smooth
+    factor (float): Controls how aggressively to smooth (higher = fewer points, smoother curve)
+    
+    Returns:
+    numpy.ndarray: Smoothed contour
+    """
+    # Check if it's a circle and optimize if needed
+    circular_contour, is_circle = optimize_circular_contour(contour)
+    if is_circle:
+        return circular_contour
+    
+    # For non-circular shapes, proceed with regular smoothing
+    # Approximate the contour with fewer points
     epsilon = factor * cv2.arcLength(contour, True)
-    return cv2.approxPolyDP(contour, epsilon, True)
+    approx = cv2.approxPolyDP(contour, epsilon, True)
+    
+    # For circle-like shapes, create an optimal elliptical contour
+    # Check if it's potentially an ellipse (more than 8 points after approximation)
+    if len(approx) > 8:
+        # Fit an ellipse to the contour
+        if len(contour) >= 5:  # Need at least 5 points to fit an ellipse
+            try:
+                ellipse = cv2.fitEllipse(contour)
+                center, axes, angle = ellipse
+                
+                # Calculate area ratio
+                contour_area = cv2.contourArea(contour)
+                ellipse_area = np.pi * axes[0] * axes[1] / 4
+                area_ratio = contour_area / ellipse_area if ellipse_area > 0 else 0
+                
+                # If it's close to an ellipse (area ratio close to 1)
+                if 0.85 < area_ratio < 1.15:
+                    # Generate a new smoother elliptical contour
+                    new_contour = []
+                    # Create many points for a smoother curve
+                    for i in range(60):
+                        angle_rad = i * 2 * np.pi / 60
+                        x = center[0] + axes[0]/2 * np.cos(angle_rad - np.radians(angle))
+                        y = center[1] + axes[1]/2 * np.sin(angle_rad - np.radians(angle))
+                        new_contour.append([[int(x), int(y)]])
+                    return np.array(new_contour, dtype=np.int32)
+            except:
+                pass  # If ellipse fitting fails, continue with normal smoothing
+    
+    # For other shapes or if ellipse fitting failed
+    # For very detailed contours, apply stronger smoothing
+    if len(approx) > 20:
+        # Simplify further to get a cleaner outline
+        epsilon = factor * 2 * cv2.arcLength(contour, True)
+        approx = cv2.approxPolyDP(contour, epsilon, True)
+    
+    return approx
 
 class ShapeDetector:
     def __init__(self):
@@ -676,7 +834,7 @@ def detect_shape():
         print(f"[DEBUG] Successfully loaded image with shape: {img.shape}")
         
         # Resize image while maintaining aspect ratio
-        max_dimension = 1000  # Increase from 800 to 1000 for better accuracy
+        max_dimension = 1000
         h, w = img.shape[:2]
         
         # Calculate new dimensions
@@ -691,33 +849,29 @@ def detect_shape():
         print(f"[DEBUG] Resizing image from {w}x{h} to {new_w}x{new_h}")
         img_resized = cv2.resize(img, (new_w, new_h))
         
-        # Create a visualization image that we'll draw on
-        # Convert RGBA to RGB for visualization if necessary
-        if len(img_resized.shape) > 2 and img_resized.shape[2] == 4:  # RGBA
-            print("[DEBUG] Converting RGBA image to RGB for visualization")
-            # Create a white background
-            viz_img = np.ones((new_h, new_w, 3), dtype=np.uint8) * 255
-            
-            # Get the RGB and alpha channels
-            rgb = img_resized[:,:,:3]
-            alpha = img_resized[:,:,3]
-            
-            # Create a mask from the alpha channel
-            alpha_mask = alpha > 0
-            
-            # Copy RGB values from the original image to the viz image where alpha > 0
-            viz_img[alpha_mask] = rgb[alpha_mask]
-        else:
-            print("[DEBUG] Image is already in RGB format")
-            viz_img = img_resized.copy()
-        
         # Create a preprocessed image for contour detection
         print("[DEBUG] Preprocessing image for contour detection")
-        processed = preprocess_image_for_contours(img_resized)
+        if len(img_resized.shape) > 2 and img_resized.shape[2] == 4:  # RGBA
+            # Use alpha channel for contour detection which gives cleaner results
+            gray = img_resized[:,:,3]
+            # Simple threshold to create a binary image
+            _, binary = cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY)
+        else:
+            # Convert to grayscale
+            gray = cv2.cvtColor(img_resized, cv2.COLOR_BGR2GRAY)
+            # Apply Gaussian blur to reduce noise with larger kernel
+            blurred = cv2.GaussianBlur(gray, (7, 7), 1.5)
+            # Use Otsu's thresholding for better results
+            _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+        
+        # Apply morphological operations to clean the binary image
+        kernel = np.ones((5, 5), np.uint8)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
         
         # Find contours in the processed image
         print("[DEBUG] Finding contours")
-        contours, _ = cv2.findContours(processed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         print(f"[DEBUG] Found {len(contours)} contours")
         
         # Find the main shape (largest contour)
@@ -727,15 +881,39 @@ def detect_shape():
             print("[ERROR] No main shape detected")
             return jsonify({'error': 'No shape detected'}), 400
             
-        # Smooth the contour to reduce noise
-        print("[DEBUG] Smoothing contour")
-        smoothed_contour = smooth_contour(main_contour)
+        # Try specialized circle detection
+        # First, check if it looks like a circle
+        peri = cv2.arcLength(main_contour, True)
+        area = cv2.contourArea(main_contour)
+        circularity = 4 * np.pi * area / (peri * peri) if peri > 0 else 0
         
-        # Initialize shape detector
-        sd = ShapeDetector()
+        if circularity > 0.75:  # Potentially a circle
+            # Try specialized circle detection preprocessing
+            circle_binary = preprocess_for_circle_detection(img_resized)
+            circle_contours, _ = cv2.findContours(circle_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+            if circle_contours:
+                # Find the largest contour
+                circle_main_contour = max(circle_contours, key=cv2.contourArea)
+                if cv2.contourArea(circle_main_contour) > 100:  # Ensure it's a significant contour
+                    main_contour = circle_main_contour
+                
+        # Check if it's a circle for special processing
+        circular_contour, is_circle = optimize_circular_contour(main_contour)
+        if is_circle:
+            print("[DEBUG] Detected a circular shape, optimizing contour")
+            main_contour = circular_contour
+            smoothed_contour = circular_contour  # For circles, use the optimized contour directly
+            shape = "circle"
+        else:
+            # Apply smoothing for non-circular shapes
+            print("[DEBUG] Smoothing contour")
+            smoothed_contour = smooth_contour(main_contour, factor=0.003)  # Less aggressive smoothing
+            
+            # Initialize shape detector (only if not already identified as a circle)
+            sd = ShapeDetector()
+            # Detect the shape
+            shape = sd.detect(smoothed_contour)
         
-        # Detect the shape
-        shape = sd.detect(smoothed_contour)
         print(f"[DEBUG] Detected shape: {shape}")
         
         # Calculate shape dimensions
@@ -743,10 +921,19 @@ def detect_shape():
         measurements = calculate_shape_size(shape, smoothed_contour, new_w)
         print(f"[DEBUG] Measurements: {measurements}")
         
-        # Draw the contour on the visualization image
-        cv2.drawContours(viz_img, [smoothed_contour], -1, (0, 255, 0), 2)
+        # Create a clean visualization with the original image and a single line outline
+        viz_img = np.ones((new_h, new_w, 3), dtype=np.uint8) * 255  # White background
         
-        # Determine the center of the contour
+        # Draw the original image
+        if len(img_resized.shape) > 2 and img_resized.shape[2] == 4:
+            # For RGBA images
+            mask = img_resized[:,:,3] > 0
+            viz_img[mask] = img_resized[:,:,:3][mask]
+        else:
+            # For RGB images
+            viz_img = img_resized.copy()
+        
+        # Get the center of the contour
         M = cv2.moments(smoothed_contour)
         if M["m00"] != 0:
             cx = int(M["m10"] / M["m00"])
@@ -754,87 +941,59 @@ def detect_shape():
         else:
             cx, cy = new_w // 2, new_h // 2
         
-        # Add shape label
-        print(f"[DEBUG] Adding visual elements to output image")
-        cv2.putText(viz_img, shape.capitalize(), (cx - 20, cy - 20),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+        # Draw a clean, blue line around the shape like in the combined detection view
+        cv2.drawContours(viz_img, [smoothed_contour], -1, (0, 0, 255), 2)  # Blue outline
         
-        # Add dimension text
-        cv2.putText(viz_img, measurements['dimension_text'], (cx - 40, cy + 40),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
-        
-        # Draw shape-specific visualizations
+        # For circles, draw a yellow diameter line like in the combined view
         if shape == "circle":
-            # Draw circle center and radius
+            # Calculate radius in pixels
             radius_px = int(measurements['radius_mm'] / calculate_real_size(1, new_w))
-            cv2.circle(viz_img, (cx, cy), 3, (0, 0, 255), -1)  # Center point
-            cv2.circle(viz_img, (cx, cy), radius_px, (255, 0, 0), 2)  # Circle outline
-            cv2.line(viz_img, (cx, cy), (cx + radius_px, cy), (255, 0, 0), 2)  # Radius line
             
-        elif shape in ["rectangle", "square"]:
-            # Draw the rotated rectangle
-            rect = cv2.minAreaRect(smoothed_contour)
-            box = cv2.boxPoints(rect)
-            box = np.int0(box)
-            cv2.drawContours(viz_img, [box], 0, (255, 0, 0), 2)
+            # Draw a diagonal diameter line (similar to combined view)
+            angle_rad = math.pi / 4  # 45 degrees
+            start_x = int(cx - radius_px * math.cos(angle_rad))
+            start_y = int(cy - radius_px * math.sin(angle_rad))
+            end_x = int(cx + radius_px * math.cos(angle_rad))
+            end_y = int(cy + radius_px * math.sin(angle_rad))
             
-            # Draw the width and height lines
-            width = rect[1][0]
-            height = rect[1][1]
-            angle = rect[2]
-            
-            # Draw dimension lines only if they're clear enough to see (not for tiny objects)
-            if width > 20 and height > 20:
-                # Find the top-left, top-right, bottom-right, and bottom-left points
-                # Sort the box points by their y-coordinate (top to bottom)
-                sorted_by_y = sorted(box, key=lambda p: p[1])
-                top_points = sorted(sorted_by_y[:2], key=lambda p: p[0])
-                bottom_points = sorted(sorted_by_y[2:], key=lambda p: p[0])
-                
-                top_left, top_right = top_points
-                bottom_left, bottom_right = bottom_points
-                
-                # Draw width line (top)
-                cv2.line(viz_img, tuple(top_left), tuple(top_right), (255, 0, 0), 2)
-                width_text_pos = ((top_left[0] + top_right[0]) // 2, top_left[1] - 10)
-                
-                # Draw height line (left)
-                cv2.line(viz_img, tuple(top_left), tuple(bottom_left), (255, 0, 0), 2)
-                height_text_pos = (top_left[0] - 40, (top_left[1] + bottom_left[1]) // 2)
-                
-                # Add dimension labels
-                if shape == "rectangle":
-                    cv2.putText(viz_img, f"W: {measurements['width_mm']}mm", width_text_pos,
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-                    cv2.putText(viz_img, f"H: {measurements['height_mm']}mm", height_text_pos,
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-                else:  # square
-                    cv2.putText(viz_img, f"Side: {measurements['side_mm']}mm", width_text_pos,
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-            
-        elif shape == "triangle":
-            # Draw the triangle vertices and sides
-            approx = cv2.approxPolyDP(smoothed_contour, 0.02 * cv2.arcLength(smoothed_contour, True), True)
-            
-            if len(approx) == 3:
-                # Draw the vertices
-                for point in approx:
-                    cv2.circle(viz_img, tuple(point[0]), 5, (0, 0, 255), -1)
-                
-                # Draw the side labels if we have side measurements
-                if 'sides_mm' in measurements and len(measurements['sides_mm']) == 3:
-                    sides = measurements['sides_mm']
-                    
-                    # Calculate midpoints of each side for labels
-                    for i in range(3):
-                        pt1 = approx[i][0]
-                        pt2 = approx[(i+1)%3][0]
-                        mid_x = (pt1[0] + pt2[0]) // 2
-                        mid_y = (pt1[1] + pt2[1]) // 2
-                        
-                        # Add side length label
-                        cv2.putText(viz_img, f"{sides[i]}mm", (mid_x, mid_y),
-                                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+            cv2.line(viz_img, (start_x, start_y), (end_x, end_y), (0, 255, 255), 2)  # Yellow line
+        
+        # Add minimal text in a clean style
+        # Add shape label with a background for better readability
+        label = shape.capitalize()
+        
+        # Create a dark background for text
+        text_bg_color = (50, 50, 50)
+        text_color = (255, 255, 255)  # White text
+        
+        # Position the text below the shape
+        label_x = cx - len(label)*5
+        label_y = cy + radius_px + 30 if shape == "circle" else cy + 50
+        
+        # Add background rectangle for text
+        text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
+        cv2.rectangle(viz_img, 
+                     (label_x - 5, label_y - text_size[1] - 5), 
+                     (label_x + text_size[0] + 5, label_y + 5), 
+                     text_bg_color, -1)
+        
+        # Draw dimension text background
+        dim_text = measurements['dimension_text']
+        dim_x = cx - len(dim_text)*4
+        dim_y = label_y + 30
+        
+        dim_text_size = cv2.getTextSize(dim_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
+        cv2.rectangle(viz_img, 
+                     (dim_x - 5, dim_y - dim_text_size[1] - 5), 
+                     (dim_x + dim_text_size[0] + 5, dim_y + 5), 
+                     text_bg_color, -1)
+        
+        # Draw text
+        cv2.putText(viz_img, label, (label_x, label_y), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, text_color, 2)
+        
+        cv2.putText(viz_img, dim_text, (dim_x, dim_y), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, text_color, 2)
         
         # Save the visualization image
         print(f"[DEBUG] Saving visualization image")
@@ -923,22 +1082,21 @@ def detect_size():
         # Step 5: Find contours with improved method
         contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
         
-        # Process contours
+        # Process contours - MODIFIED to only find the main shape
         size_image = image.copy()
         results = []
         
-        for contour in contours:
-            # Skip very small contours
-            if cv2.contourArea(contour) < 300:  # Higher threshold for size detection
-                continue
-            
+        # Find the main contour (largest one)
+        main_contour = find_main_shape(contours)
+        
+        if main_contour is not None:
             # Scale contour to original size if image was resized
             if max(orig_height, orig_width) > max_dim:
-                contour = contour * (orig_width / resized_width)
-                contour = contour.astype(np.int32)
+                main_contour = main_contour * (orig_width / resized_width)
+                main_contour = main_contour.astype(np.int32)
             
             # Use minimum area rotated rectangle for better measurements
-            rect = cv2.minAreaRect(contour)
+            rect = cv2.minAreaRect(main_contour)
             box = cv2.boxPoints(rect)
             box = np.intp(box)
             
@@ -1015,7 +1173,47 @@ def detect_color():
     if not os.path.exists(filepath):
         return jsonify({'error': 'File not found'}), 404
     
-    # Process image for color detection
+    # Process image with enhanced color detection
+    try:
+        # Use our enhanced color detector
+        output_image, color_results = enhanced_color_detector.detect_colors(filepath)
+        
+        # Save the processed image
+        output_filename = f"color_{filename}"
+        output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_filename)
+        cv2.imwrite(output_path, output_image)
+        
+        # Add shape info to each color (using the existing shape detector)
+        sd = ShapeDetector()
+        
+        # Get binary image for contour detection
+        binary = preprocess_image_for_contours(cv2.imread(filepath))
+        # Find contours
+        cnts, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Match shapes to colors
+        for i, contour in enumerate(cnts):
+            if cv2.contourArea(contour) < 500:
+                continue
+                
+            # Detect shape
+            shape = sd.detect(contour)
+            
+            # If we have a corresponding color result, add the shape
+            if i < len(color_results):
+                color_results[i]['shape'] = shape
+        
+        return jsonify({
+            'success': True,
+            'colors': color_results,
+            'processedImage': '/static/uploads/' + output_filename
+        })
+        
+    except Exception as e:
+        error_trace = traceback.format_exc()
+        print(f"Error in enhanced color detection: {str(e)}\n{error_trace}")
+        
+        # Fall back to the original color detection if enhanced detection fails
     try:
         # Generate output paths
         bg_removed_path = os.path.join(app.config['UPLOAD_FOLDER'], f"nobg_{filename}")
@@ -1127,10 +1325,10 @@ def detect_color():
             'processedImage': '/static/uploads/' + output_filename
         })
         
-    except Exception as e:
-        error_trace = traceback.format_exc()
-        print(f"Error in color detection: {str(e)}\n{error_trace}")
-        return jsonify({'error': str(e)}), 500
+        except Exception as e2:
+            error_trace2 = traceback.format_exc()
+            print(f"Error in fallback color detection: {str(e2)}\n{error_trace2}")
+            return jsonify({'error': f"Error detecting colors: {str(e)}, fallback failed: {str(e2)}"}), 500
 
 @app.route('/detect-shape-color', methods=['POST'])
 def detect_shape_color():
@@ -1147,6 +1345,111 @@ def detect_shape_color():
     
     # Process image for combined shape and color detection
     try:
+        # First try with the enhanced color detector
+        try:
+            # Process the image with our enhanced detector first
+            output_image, color_results = enhanced_color_detector.detect_colors(filepath)
+            
+            # We still need to detect shapes and get measurements
+            # Generate output paths for background removal
+            bg_removed_path = os.path.join(app.config['UPLOAD_FOLDER'], f"nobg_{filename}")
+            if not bg_removed_path.lower().endswith('.png'):
+                bg_removed_path = bg_removed_path.rsplit('.', 1)[0] + '.png'
+            
+            # Remove background and save as PNG
+            remove_background(filepath, bg_removed_path)
+            
+            # Load image
+            image = cv2.imread(bg_removed_path)
+            if image is None:
+                raise Exception("Failed to load image after background removal")
+            
+            # Get image dimensions for size calculations
+            img_height, img_width = image.shape[:2]
+            
+            # Resize for processing while maintaining aspect ratio
+            max_dim = 1000
+            scale_factor = min(max_dim / img_width, max_dim / img_height)
+            if scale_factor < 1:
+                resized_width = int(img_width * scale_factor)
+                resized_height = int(img_height * scale_factor)
+                resized = cv2.resize(image, (resized_width, resized_height), interpolation=cv2.INTER_AREA)
+                ratio = img_height / float(resized_height)
+            else:
+                resized = image.copy()
+                ratio = 1.0
+            
+            # Apply improved edge detection and preprocessing
+            binary = preprocess_image_for_contours(resized)
+            
+            # Find contours
+            cnts, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # Initialize shape detector
+            sd = ShapeDetector()
+            
+            # Create combined results
+            combined_results = []
+            
+            # Process each contour
+            for i, c in enumerate(cnts):
+                # Filter small contours
+                if cv2.contourArea(c) < 500:
+                    continue
+                
+                # Scale contour to original size
+                c_orig = c.astype("float") * ratio
+                c_orig = c_orig.astype("int")
+                
+                # Detect shape
+                shape = sd.detect(c)
+                
+                # Calculate measurements
+                pixel_size, dimensions, area_mm2 = calculate_shape_size(shape, c, img_width)
+                
+                # Find matching color result
+                color_info = None
+                if i < len(color_results):
+                    color_info = color_results[i]
+                else:
+                    # Fallback to original method if no match
+                    avg_color = get_avg_color(c_orig, image)
+                    color_name = closest_color(avg_color)
+                    hex_color = '#{:02x}{:02x}{:02x}'.format(avg_color[0], avg_color[1], avg_color[2])
+                    color_info = {
+                        'color': color_name,
+                        'rgb': avg_color,
+                        'hex': hex_color
+                    }
+                
+                # Create combined result
+                combined_result = {
+                    'shape': shape,
+                    'color': color_info['color'],
+                    'hex': color_info['hex'],
+                    'dimensions': dimensions,
+                    'area_mm2': area_mm2
+                }
+                
+                combined_results.append(combined_result)
+            
+            # Save the processed image
+            output_filename = f"combined_{filename}"
+            output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_filename)
+            cv2.imwrite(output_path, output_image)
+            
+            return jsonify({
+                'success': True,
+                'results': combined_results,
+                'processedImage': '/static/uploads/' + output_filename
+            })
+            
+        except Exception as enhanced_error:
+            # Log the error but proceed with original method
+            print(f"Enhanced detection failed: {str(enhanced_error)}")
+            print(f"Falling back to original method...")
+            
+            # Original implementation starts here
         # Generate output paths
         bg_removed_path = os.path.join(app.config['UPLOAD_FOLDER'], f"nobg_{filename}")
         if not bg_removed_path.lower().endswith('.png'):
@@ -1187,150 +1490,100 @@ def detect_shape_color():
         if main_contour is None:
             return jsonify({'error': 'No shapes detected in the image'}), 400
             
-        # Smooth the contour to remove noise and small deviations
-        main_contour = smooth_contour(main_contour)
+        # Try specialized circle detection
+        # First, check if it looks like a circle
+        peri = cv2.arcLength(main_contour, True)
+        area = cv2.contourArea(main_contour)
+        circularity = 4 * np.pi * area / (peri * peri) if peri > 0 else 0
         
-        # Scale contour back to original image size    
-        if scale_factor < 1:
-            main_contour = main_contour.astype("float") * ratio
-            main_contour = main_contour.astype("int")
-        
-        # Initialize ShapeDetector
+        if circularity > 0.75:  # Potentially a circle
+            # Try specialized circle detection preprocessing
+            circle_binary = preprocess_for_circle_detection(resized)
+            circle_contours, _ = cv2.findContours(circle_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+            if circle_contours:
+                # Find the largest contour
+                circle_main_contour = max(circle_contours, key=cv2.contourArea)
+                if cv2.contourArea(circle_main_contour) > 100:  # Ensure it's a significant contour
+                    main_contour = circle_main_contour
+                
+            # Process all contours
+            output = image.copy()
+            results = []
         sd = ShapeDetector()
         
-        # Process results
-        results = []
-        
-        # Create a high-quality visualization image
-        # Start with a clean copy of the original
-        output_image = image.copy()
-        
-        # Draw contour with different line thickness for better visibility
-        cv2.drawContours(output_image, [main_contour], -1, (0, 255, 0), 2)
-        
-        # Get center coordinates using moments
-        M = cv2.moments(main_contour)
-        if M["m00"] > 0:
-            cX = int((M["m10"] / M["m00"]))
-            cY = int((M["m01"] / M["m00"]))
-            
-            # Detect shape
-            shape = sd.detect(main_contour)
-            
-            # Get dominant color of the shape with our improved method
-            avg_color = get_avg_color(main_contour, image)
+            for c in cnts:
+                # Skip small contours
+                if cv2.contourArea(c) < 500:  # Min area threshold
+                    continue
+                
+                # Get moments and compute centroid
+                M = cv2.moments(c)
+                if M["m00"] == 0:
+                    continue
+                
+                # Scale back to original size
+                c_orig = c.astype("float") * ratio
+                c_orig = c_orig.astype("int")
+                
+                cX = int((M["m10"] / M["m00"]) * ratio)
+                cY = int((M["m01"] / M["m00"]) * ratio)
+                
+                # Detect shape
+                shape = sd.detect(c)
+                
+                # Get color
+                avg_color = get_avg_color(c_orig, image)
             color_name = closest_color(avg_color)
-            
-            # Calculate size measurements
-            measurements = calculate_shape_size(shape, main_contour, img_width)
-            
-            # Convert RGB to hex for frontend display
             hex_color = '#{:02x}{:02x}{:02x}'.format(avg_color[0], avg_color[1], avg_color[2])
             
-            # Create result object with all information
+                # Calculate size
+                pixel_size, dimensions, area_mm2 = calculate_shape_size(shape, c, img_width)
+                
+                # Create result object
             result = {
                 'shape': shape,
                 'color': color_name,
-                'rgb': avg_color,
                 'hex': hex_color,
-                'dimensions': measurements['dimension_text']
+                    'dimensions': dimensions,
+                    'area_mm2': area_mm2
             }
-            
-            # Add all measurements to the result
-            for key, value in measurements.items():
-                if key != 'dimension_text':
-                    result[key] = value
             
             results.append(result)
             
-            # Create semi-transparent overlay for better text visibility
-            overlay = output_image.copy()
-            text_bg_color = (0, 0, 0)
-            
-            # Add text with improved positioning and better contrast
-            text_color = (255, 255, 255)  # White text
-            
-            # Create a label with shape name
-            label = shape.capitalize()
-            
-            # Calculate label positions based on shape size
-            bbox = cv2.boundingRect(main_contour)
-            bbox_width, bbox_height = bbox[2], bbox[3]
-            
-            # Position the text based on object dimensions
-            if bbox_width > 100 and bbox_height > 100:
-                # For larger shapes, put text inside
-                label_x = cX - len(label)*5
-                label_y = cY - 30
-                dim_x = cX - len(measurements['dimension_text'])*4
-                dim_y = cY + 10
-            else:
-                # For smaller shapes, position text below
-                label_x = cX - len(label)*5
-                label_y = cY + bbox_height//2 + 30
-                dim_x = cX - len(measurements['dimension_text'])*4
-                dim_y = label_y + 30
-            
-            # Draw text background for better visibility
-            text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
-            cv2.rectangle(overlay, 
-                         (label_x - 5, label_y - text_size[1] - 5), 
-                         (label_x + text_size[0] + 5, label_y + 5), 
-                         text_bg_color, -1)
-            
-            dim_text_size = cv2.getTextSize(measurements['dimension_text'], cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
-            cv2.rectangle(overlay, 
-                         (dim_x - 5, dim_y - dim_text_size[1] - 5), 
-                         (dim_x + dim_text_size[0] + 5, dim_y + 5), 
-                         text_bg_color, -1)
-            
-            # Apply transparency to the overlay
-            alpha = 0.6
-            cv2.addWeighted(overlay, alpha, output_image, 1 - alpha, 0, output_image)
-            
-            # Draw shape label
-            cv2.putText(output_image, label, (label_x, label_y), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, text_color, 2)
-            
-            # Draw dimension text
-            cv2.putText(output_image, measurements['dimension_text'], (dim_x, dim_y), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, text_color, 2)
-            
-            # Draw dimension visualization on the object
-            if shape == "circle":
-                # Draw diameter line for circles
-                radius_px = measurements.get('radius_mm', 0) / calculate_real_size(1, img_width)
-                angle_rad = math.pi / 4  # 45 degrees
-                start_x = int(cX - radius_px * math.cos(angle_rad))
-                start_y = int(cY - radius_px * math.sin(angle_rad))
-                end_x = int(cX + radius_px * math.cos(angle_rad))
-                end_y = int(cY + radius_px * math.sin(angle_rad))
+                # Draw on output image
+                cv2.drawContours(output, [c_orig], -1, (0, 255, 0), 2)
+                cv2.putText(output, shape, (cX, cY - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                cv2.putText(output, color_name, (cX, cY + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
                 
-                cv2.line(output_image, (start_x, start_y), (end_x, end_y), (0, 255, 255), 2)
+                # Add dimension text
+                cv2.putText(output, dimensions, (cX, cY + 45), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
                 
-                # Draw radius
-                cv2.line(output_image, (cX, cY), (end_x, end_y), (0, 200, 255), 1)
+                # Draw a small color swatch
+                color_swatch_size = 20
+                color_swatch = np.zeros((color_swatch_size, color_swatch_size, 3), dtype=np.uint8)
+                color_swatch[:, :] = (avg_color[2], avg_color[1], avg_color[0])  # BGR format
                 
-            elif shape in ["square", "rectangle"]:
-                # For squares and rectangles, draw the minimum area rectangle
-                rect = cv2.minAreaRect(main_contour)
-                box = cv2.boxPoints(rect)
-                box = np.intp(box)
+                # Place color swatch near the shape label
+                swatch_x = cX + 60
+                swatch_y = cY - 10
                 
-                # Draw diagonals for visualization
-                cv2.line(output_image, tuple(box[0]), tuple(box[2]), (0, 255, 255), 1)
-                cv2.line(output_image, tuple(box[1]), tuple(box[3]), (0, 255, 255), 1)
-                
-                # Draw midpoints on each side
-                for i in range(4):
-                    mid_x = (box[i][0] + box[(i+1)%4][0]) // 2
-                    mid_y = (box[i][1] + box[(i+1)%4][1]) // 2
-                    cv2.circle(output_image, (mid_x, mid_y), 3, (0, 255, 255), -1)
-        
-        # Save the processed image
-        output_filename = f"shape_color_{filename}"
+                # Make sure the swatch fits within the image
+                if (swatch_y >= 0 and swatch_y + color_swatch_size < output.shape[0] and 
+                    swatch_x >= 0 and swatch_x + color_swatch_size < output.shape[1]):
+                    output[swatch_y:swatch_y+color_swatch_size, 
+                           swatch_x:swatch_x+color_swatch_size] = color_swatch
+                    
+                    # Add border
+                    cv2.rectangle(output, 
+                                (swatch_x, swatch_y), 
+                                (swatch_x + color_swatch_size, swatch_y + color_swatch_size), 
+                                (0, 0, 0), 1)
+            
+            # Save the result
+            output_filename = f"combined_{filename}"
         output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_filename)
-        cv2.imwrite(output_path, output_image)
+            cv2.imwrite(output_path, output)
         
         return jsonify({
             'success': True,
@@ -1340,12 +1593,23 @@ def detect_shape_color():
         
     except Exception as e:
         error_trace = traceback.format_exc()
-        print(f"Error in shape and color detection: {str(e)}\n{error_trace}")
+        print(f"Error in combined detection: {str(e)}\n{error_trace}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/static/uploads/<filename>')
 def serve_file(filename):
+    """Serve files from the upload directory."""
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+@app.route('/download/<filename>')
+def download_file(filename):
+    """Download a file with the correct headers for browser download."""
+    return send_from_directory(
+        app.config['UPLOAD_FOLDER'], 
+        filename, 
+        as_attachment=True,
+        mimetype='image/png'
+    )
 
 # Initialize application resources
 def initialize_app():

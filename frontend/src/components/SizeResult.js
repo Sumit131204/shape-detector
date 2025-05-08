@@ -39,7 +39,7 @@ const SizeResult = ({ measurements }) => {
             transition: "transform 0.3s ease",
           }}
         >
-          <h4 className="mb-0">Size Measurements</h4>
+          <h4 className="mb-0">Main Shape Size</h4>
         </Card.Header>
         <Card.Body
           style={{
@@ -53,7 +53,7 @@ const SizeResult = ({ measurements }) => {
             <p className="text-muted">No measurements available.</p>
           ) : (
             <div>
-              <p>Detected {measurements.length} object(s) in the image:</p>
+              <p>Measurements of the main shape in the image:</p>
               <Table
                 striped
                 bordered

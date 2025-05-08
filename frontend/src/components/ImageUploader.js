@@ -39,7 +39,7 @@ const ImageUploader = ({ onFileUpload, imageUrl }) => {
   };
 
   return (
-    <div className="d-flex flex-column align-items-center justify-content-center w-100">
+    <div className="d-flex flex-column align-items-center justify-content-center w-100 ">
       {/* Display the original image if available */}
       {imageUrl && (
         <div

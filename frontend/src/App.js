@@ -7,6 +7,8 @@ import {
   Button,
   Spinner,
   Alert,
+  Toast,
+  ToastContainer,
 } from "react-bootstrap";
 import "bootstrap/dist/css/bootstrap.min.css";
 import "./App.css";
@@ -34,6 +36,8 @@ function App() {
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState("upload"); // 'upload', 'shape', 'size', 'color', or 'combined'
   const [debug, setDebug] = useState(null);
+  const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState("");
 
   // Utility function to fix image URLs from the backend
   const fixImageUrl = (url) => {
@@ -352,10 +356,38 @@ function App() {
       style={{ maxWidth: "1200px", margin: "0 auto" }}
     >
       <Card className="shadow-sm">
-        <Card.Header className="bg-primary text-white text-center py-3">
-          <h2 className="mb-0">Shape, Size, and Color Detector</h2>
-        </Card.Header>
-        <Card.Body className="px-4 py-4">
+        <div className="logo-header">
+          {/* <img
+            src={`${process.env.PUBLIC_URL}/logo.jpg`}
+            alt="Concept Systems Logo"
+            className="company-logo"
+          /> */}
+          <span>
+            Automated Realtime Image-Driven Quality Control:
+            <br />
+            For Industrial Object Classification
+          </span>
+        </div>
+        <Card.Body className="px-4 py-4 position-relative">
+          {/* Text image - positioned left in detection tabs, right in upload tab */}
+          <div
+            style={{
+              position: "absolute",
+              top: "70px",
+              [activeTab === "upload" ? "right" : "left"]: "30px",
+              zIndex: "100",
+            }}
+          >
+            <img
+              src={`${process.env.PUBLIC_URL}/text.jpg`}
+              alt="Text"
+              style={{
+                maxHeight: activeTab === "upload" ? "80px" : "50px",
+                borderRadius: "4px",
+              }}
+            />
+          </div>
+
           <Row className="mb-4">
             <Col xs={12} className="d-flex justify-content-center">
               <div className="action-buttons d-flex flex-wrap justify-content-center">
@@ -517,7 +549,7 @@ function App() {
                     {activeTab === "shape"
                       ? "Shape Detection Result"
                       : activeTab === "size"
-                      ? "Size Detection Result"
+                      ? "Main Shape Size Detection Result"
                       : activeTab === "color"
                       ? "Color Detection Result"
                       : "Combined Detection Result"}
@@ -533,6 +565,66 @@ function App() {
                         boxShadow: "0 2px 5px rgba(0,0,0,0.1)",
                       }}
                     />
+                    <div className="mt-2 mb-3">
+                      <Button
+                        variant="outline-primary"
+                        className="download-btn"
+                        style={{
+                          transition: "all 0.3s ease",
+                          borderRadius: "6px",
+                          padding: "8px 16px",
+                          boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
+                        }}
+                        onMouseOver={(e) => {
+                          e.currentTarget.style.transform = "translateY(-2px)";
+                          e.currentTarget.style.boxShadow =
+                            "0 4px 8px rgba(0,0,0,0.15)";
+                        }}
+                        onMouseOut={(e) => {
+                          e.currentTarget.style.transform = "translateY(0)";
+                          e.currentTarget.style.boxShadow =
+                            "0 2px 4px rgba(0,0,0,0.1)";
+                        }}
+                        onClick={() => {
+                          // Extract filename from the URL
+                          const urlParts = processedImageUrl.split("/");
+                          const filename = urlParts[urlParts.length - 1];
+
+                          // Use the download endpoint
+                          const downloadUrl = `${axios.defaults.baseURL}/download/${filename}`;
+
+                          // Create a temporary anchor element
+                          const link = document.createElement("a");
+                          link.href = downloadUrl;
+                          link.download = `${activeTab}-detection-result.png`;
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+
+                          // Show toast notification
+                          setToastMessage(
+                            `${
+                              activeTab.charAt(0).toUpperCase() +
+                              activeTab.slice(1)
+                            } detection result downloaded!`
+                          );
+                          setShowToast(true);
+                        }}
+                      >
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          width="16"
+                          height="16"
+                          fill="currentColor"
+                          className="bi bi-download me-2"
+                          viewBox="0 0 16 16"
+                        >
+                          <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z" />
+                          <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z" />
+                        </svg>
+                        Download Image
+                      </Button>
+                    </div>
                     {debug && debug.imageError && (
                       <Alert variant="warning" className="mt-2 mb-0">
                         Error loading image: {debug.imageError}
@@ -637,6 +729,25 @@ function App() {
           </p>
         </Card.Footer>
       </Card>
+
+      <ToastContainer
+        position="bottom-end"
+        className="p-3"
+        style={{ zIndex: 1050 }}
+      >
+        <Toast
+          onClose={() => setShowToast(false)}
+          show={showToast}
+          delay={3000}
+          autohide
+          bg="success"
+        >
+          <Toast.Header>
+            <strong className="me-auto">Success</strong>
+          </Toast.Header>
+          <Toast.Body className="text-white">{toastMessage}</Toast.Body>
+        </Toast>
+      </ToastContainer>
     </Container>
   );
 }

@@ -86,7 +86,7 @@ const ShapeResult = ({ shapes }) => {
                         : "none",
                     }}
                   >
-                    <div className="d-flex justify-content-between align-items-center mb-2">
+                    <div className="d-flex justify-content-between align-items-center">
                       <div>
                         <Badge
                           bg={getBadgeColor(item.shape)}
@@ -119,69 +119,6 @@ const ShapeResult = ({ shapes }) => {
                         </div>
                       )}
                     </div>
-
-                    {/* Display shape dimensions */}
-                    {item.dimensions && (
-                      <div
-                        className="mt-1 small"
-                        style={{
-                          transform: isHovered
-                            ? "translateZ(3px)"
-                            : "translateZ(0)",
-                          transition: "transform 0.3s ease",
-                        }}
-                      >
-                        <strong>Dimensions:</strong> {item.dimensions}
-                      </div>
-                    )}
-
-                    {/* Display additional measurements based on shape type */}
-                    {item.shape === "circle" && item.radius_mm && (
-                      <div
-                        className="mt-1 small"
-                        style={{
-                          transform: isHovered
-                            ? "translateZ(3px)"
-                            : "translateZ(0)",
-                          transition: "transform 0.3s ease",
-                        }}
-                      >
-                        <strong>Radius:</strong> {item.radius_mm.toFixed(1)} mm
-                      </div>
-                    )}
-
-                    {item.shape === "rectangle" &&
-                      item.width_mm &&
-                      item.height_mm && (
-                        <div
-                          className="mt-1 small"
-                          style={{
-                            transform: isHovered
-                              ? "translateZ(3px)"
-                              : "translateZ(0)",
-                            transition: "transform 0.3s ease",
-                          }}
-                        >
-                          <strong>Width:</strong> {item.width_mm.toFixed(1)} mm,
-                          <strong> Height:</strong> {item.height_mm.toFixed(1)}{" "}
-                          mm
-                        </div>
-                      )}
-
-                    {item.shape === "square" && item.side_mm && (
-                      <div
-                        className="mt-1 small"
-                        style={{
-                          transform: isHovered
-                            ? "translateZ(3px)"
-                            : "translateZ(0)",
-                          transition: "transform 0.3s ease",
-                        }}
-                      >
-                        <strong>Side Length:</strong> {item.side_mm.toFixed(1)}{" "}
-                        mm
-                      </div>
-                    )}
                   </ListGroup.Item>
                 ))}
               </ListGroup>
