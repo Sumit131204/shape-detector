@@ -1214,117 +1214,117 @@ def detect_color():
         print(f"Error in enhanced color detection: {str(e)}\n{error_trace}")
         
         # Fall back to the original color detection if enhanced detection fails
-    try:
-        # Generate output paths
-        bg_removed_path = os.path.join(app.config['UPLOAD_FOLDER'], f"nobg_{filename}")
-        if not bg_removed_path.lower().endswith('.png'):
-            bg_removed_path = bg_removed_path.rsplit('.', 1)[0] + '.png'
-        
-        # Remove background and save as PNG
-        remove_background(filepath, bg_removed_path)
-        
-        # Load image
-        image = cv2.imread(bg_removed_path)
-        if image is None:
-            raise Exception("Failed to load image after background removal")
-        
-        # Get image dimensions
-        img_height, img_width = image.shape[:2]
-        
-        # Resize for processing while maintaining aspect ratio
-        max_dim = 800
-        scale_factor = min(max_dim / img_width, max_dim / img_height)
-        if scale_factor < 1:
-            resized_width = int(img_width * scale_factor)
-            resized_height = int(img_height * scale_factor)
-            resized = cv2.resize(image, (resized_width, resized_height), interpolation=cv2.INTER_AREA)
-            ratio = img_height / float(resized_height)
-        else:
-            resized = image.copy()
-            ratio = 1.0
-        
-        # Apply preprocessing for better contour detection
-        binary = preprocess_image_for_contours(resized)
-        
-        # Find contours
-        cnts, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        sd = ShapeDetector()
-        
-        # Process results
-        results = []
-        output_image = image.copy()
-        
-        for c in cnts:
-            # Filter small contours
-            if cv2.contourArea(c) < 50:
-                continue
+        try:
+            # Original implementation starts here
+            # Generate output paths
+            bg_removed_path = os.path.join(app.config['UPLOAD_FOLDER'], f"nobg_{filename}")
+            if not bg_removed_path.lower().endswith('.png'):
+                bg_removed_path = bg_removed_path.rsplit('.', 1)[0] + '.png'
+            
+            # Remove background and save as PNG
+            remove_background(filepath, bg_removed_path)
+            
+            # Load image
+            image = cv2.imread(bg_removed_path)
+            if image is None:
+                raise Exception("Failed to load image after background removal")
+            
+            # Get image dimensions for size calculations
+            img_height, img_width = image.shape[:2]
+            
+            # Resize for processing while maintaining aspect ratio
+            max_dim = 1000
+            scale_factor = min(max_dim / img_width, max_dim / img_height)
+            if scale_factor < 1:
+                resized_width = int(img_width * scale_factor)
+                resized_height = int(img_height * scale_factor)
+                resized = cv2.resize(image, (resized_width, resized_height), interpolation=cv2.INTER_AREA)
+                ratio = img_height / float(resized_height)
+            else:
+                resized = image.copy()
+                ratio = 1.0
+            
+            # Apply improved edge detection and preprocessing
+            binary = preprocess_image_for_contours(resized)
+            
+            # Find contours
+            cnts, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # Process results
+            results = []
+            output_image = image.copy()
+            
+            for c in cnts:
+                # Filter small contours
+                if cv2.contourArea(c) < 50:
+                    continue
+                    
+                M = cv2.moments(c)
+                if M["m00"] == 0:
+                    continue
                 
-            M = cv2.moments(c)
-            if M["m00"] == 0:
-                continue
+                # Scale contour back to original image size    
+                c_orig = c.astype("float") * ratio
+                c_orig = c_orig.astype("int")
+                
+                # Get center coordinates
+                cX = int((M["m10"] / M["m00"]) * ratio)
+                cY = int((M["m01"] / M["m00"]) * ratio)
+                
+                # Detect shape
+                shape = sd.detect(c)
+                
+                # Get dominant color of the shape
+                avg_color = get_avg_color(c_orig, image)
+                color_name = closest_color(avg_color)
+                
+                # Convert RGB to hex for frontend display
+                hex_color = '#{:02x}{:02x}{:02x}'.format(avg_color[0], avg_color[1], avg_color[2])
+                
+                # Save contour details with shape and color information
+                results.append({
+                    'shape': shape,
+                    'color': color_name,
+                    'rgb': avg_color,
+                    'hex': hex_color
+                })
+                
+                # Draw contours and labels on the output image
+                cv2.drawContours(output_image, [c_orig], -1, (0, 255, 0), 2)
+                
+                # Draw shape name and color name
+                cv2.putText(output_image, f"{shape}", (cX, cY - 25), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                cv2.putText(output_image, f"{color_name}", (cX, cY + 25), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                
+                # Add a small rectangle with the detected color
+                color_block_size = 30
+                color_bg = np.zeros((color_block_size, color_block_size, 3), dtype=np.uint8)
+                color_bg[:, :] = (avg_color[2], avg_color[1], avg_color[0])  # BGR for OpenCV
+                
+                # Overlay the color rectangle
+                x_pos = cX + 60
+                y_pos = cY - 15
+                output_image[y_pos:y_pos+color_block_size, x_pos:x_pos+color_block_size] = color_bg
+                
+                # Add a black border around the color square
+                cv2.rectangle(output_image, 
+                             (x_pos, y_pos), 
+                             (x_pos + color_block_size, y_pos + color_block_size), 
+                             (0, 0, 0), 1)
             
-            # Scale contour back to original image size    
-            c_orig = c.astype("float") * ratio
-            c_orig = c_orig.astype("int")
+            # Save the processed image
+            output_filename = f"color_{filename}"
+            output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_filename)
+            cv2.imwrite(output_path, output_image)
             
-            # Get center coordinates
-            cX = int((M["m10"] / M["m00"]) * ratio)
-            cY = int((M["m01"] / M["m00"]) * ratio)
-            
-            # Detect shape
-            shape = sd.detect(c)
-            
-            # Get dominant color of the shape
-            avg_color = get_avg_color(c_orig, image)
-            color_name = closest_color(avg_color)
-            
-            # Convert RGB to hex for frontend display
-            hex_color = '#{:02x}{:02x}{:02x}'.format(avg_color[0], avg_color[1], avg_color[2])
-            
-            # Save contour details with shape and color information
-            results.append({
-                'shape': shape,
-                'color': color_name,
-                'rgb': avg_color,
-                'hex': hex_color
+            return jsonify({
+                'success': True,
+                'colors': results,
+                'processedImage': '/static/uploads/' + output_filename
             })
             
-            # Draw contours and labels on the output image
-            cv2.drawContours(output_image, [c_orig], -1, (0, 255, 0), 2)
-            
-            # Draw shape name and color name
-            cv2.putText(output_image, f"{shape}", (cX, cY - 25), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            cv2.putText(output_image, f"{color_name}", (cX, cY + 25), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            
-            # Add a small rectangle with the detected color
-            color_block_size = 30
-            color_bg = np.zeros((color_block_size, color_block_size, 3), dtype=np.uint8)
-            color_bg[:, :] = (avg_color[2], avg_color[1], avg_color[0])  # BGR for OpenCV
-            
-            # Overlay the color rectangle
-            x_pos = cX + 60
-            y_pos = cY - 15
-            output_image[y_pos:y_pos+color_block_size, x_pos:x_pos+color_block_size] = color_bg
-            
-            # Add a black border around the color square
-            cv2.rectangle(output_image, 
-                         (x_pos, y_pos), 
-                         (x_pos + color_block_size, y_pos + color_block_size), 
-                         (0, 0, 0), 1)
-        
-        # Save the processed image
-        output_filename = f"color_{filename}"
-        output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_filename)
-        cv2.imwrite(output_path, output_image)
-        
-        return jsonify({
-            'success': True,
-            'colors': results,
-            'processedImage': '/static/uploads/' + output_filename
-        })
-        
         except Exception as e2:
             error_trace2 = traceback.format_exc()
             print(f"Error in fallback color detection: {str(e2)}\n{error_trace2}")
@@ -1405,7 +1405,7 @@ def detect_shape_color():
                 shape = sd.detect(c)
                 
                 # Calculate measurements
-                pixel_size, dimensions, area_mm2 = calculate_shape_size(shape, c, img_width)
+                measurements = calculate_shape_size(shape, c, img_width)
                 
                 # Find matching color result
                 color_info = None
@@ -1427,8 +1427,8 @@ def detect_shape_color():
                     'shape': shape,
                     'color': color_info['color'],
                     'hex': color_info['hex'],
-                    'dimensions': dimensions,
-                    'area_mm2': area_mm2
+                    'dimensions': measurements['dimension_text'],
+                    'area_mm2': measurements['area_mm2']
                 }
                 
                 combined_results.append(combined_result)
@@ -1450,67 +1450,67 @@ def detect_shape_color():
             print(f"Falling back to original method...")
             
             # Original implementation starts here
-        # Generate output paths
-        bg_removed_path = os.path.join(app.config['UPLOAD_FOLDER'], f"nobg_{filename}")
-        if not bg_removed_path.lower().endswith('.png'):
-            bg_removed_path = bg_removed_path.rsplit('.', 1)[0] + '.png'
-        
-        # Remove background and save as PNG
-        remove_background(filepath, bg_removed_path)
-        
-        # Load image
-        image = cv2.imread(bg_removed_path)
-        if image is None:
-            raise Exception("Failed to load image after background removal")
-        
-        # Get image dimensions for size calculations
-        img_height, img_width = image.shape[:2]
-        
-        # Resize for processing while maintaining aspect ratio
-        max_dim = 1000
-        scale_factor = min(max_dim / img_width, max_dim / img_height)
-        if scale_factor < 1:
-            resized_width = int(img_width * scale_factor)
-            resized_height = int(img_height * scale_factor)
-            resized = cv2.resize(image, (resized_width, resized_height), interpolation=cv2.INTER_AREA)
-            ratio = img_height / float(resized_height)
-        else:
-            resized = image.copy()
-            ratio = 1.0
-        
-        # Apply improved edge detection and preprocessing
-        binary = preprocess_image_for_contours(resized)
-        
-        # Find contours - using RETR_EXTERNAL to get only the outermost contours
-        cnts, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Find the main shape (largest contour)
-        main_contour = find_main_shape(cnts)
-        
-        if main_contour is None:
-            return jsonify({'error': 'No shapes detected in the image'}), 400
+            # Generate output paths
+            bg_removed_path = os.path.join(app.config['UPLOAD_FOLDER'], f"nobg_{filename}")
+            if not bg_removed_path.lower().endswith('.png'):
+                bg_removed_path = bg_removed_path.rsplit('.', 1)[0] + '.png'
             
-        # Try specialized circle detection
-        # First, check if it looks like a circle
-        peri = cv2.arcLength(main_contour, True)
-        area = cv2.contourArea(main_contour)
-        circularity = 4 * np.pi * area / (peri * peri) if peri > 0 else 0
-        
-        if circularity > 0.75:  # Potentially a circle
-            # Try specialized circle detection preprocessing
-            circle_binary = preprocess_for_circle_detection(resized)
-            circle_contours, _ = cv2.findContours(circle_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-            if circle_contours:
-                # Find the largest contour
-                circle_main_contour = max(circle_contours, key=cv2.contourArea)
-                if cv2.contourArea(circle_main_contour) > 100:  # Ensure it's a significant contour
-                    main_contour = circle_main_contour
+            # Remove background and save as PNG
+            remove_background(filepath, bg_removed_path)
+            
+            # Load image
+            image = cv2.imread(bg_removed_path)
+            if image is None:
+                raise Exception("Failed to load image after background removal")
+            
+            # Get image dimensions for size calculations
+            img_height, img_width = image.shape[:2]
+            
+            # Resize for processing while maintaining aspect ratio
+            max_dim = 1000
+            scale_factor = min(max_dim / img_width, max_dim / img_height)
+            if scale_factor < 1:
+                resized_width = int(img_width * scale_factor)
+                resized_height = int(img_height * scale_factor)
+                resized = cv2.resize(image, (resized_width, resized_height), interpolation=cv2.INTER_AREA)
+                ratio = img_height / float(resized_height)
+            else:
+                resized = image.copy()
+                ratio = 1.0
+            
+            # Apply improved edge detection and preprocessing
+            binary = preprocess_image_for_contours(resized)
+            
+            # Find contours - using RETR_EXTERNAL to get only the outermost contours
+            cnts, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # Find the main shape (largest contour)
+            main_contour = find_main_shape(cnts)
+            
+            if main_contour is None:
+                return jsonify({'error': 'No shapes detected in the image'}), 400
                 
+            # Try specialized circle detection
+            # First, check if it looks like a circle
+            peri = cv2.arcLength(main_contour, True)
+            area = cv2.contourArea(main_contour)
+            circularity = 4 * np.pi * area / (peri * peri) if peri > 0 else 0
+            
+            if circularity > 0.75:  # Potentially a circle
+                # Try specialized circle detection preprocessing
+                circle_binary = preprocess_for_circle_detection(resized)
+                circle_contours, _ = cv2.findContours(circle_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+                if circle_contours:
+                    # Find the largest contour
+                    circle_main_contour = max(circle_contours, key=cv2.contourArea)
+                    if cv2.contourArea(circle_main_contour) > 100:  # Ensure it's a significant contour
+                        main_contour = circle_main_contour
+            
             # Process all contours
             output = image.copy()
             results = []
-        sd = ShapeDetector()
-        
+            sd = ShapeDetector()
+            
             for c in cnts:
                 # Skip small contours
                 if cv2.contourArea(c) < 500:  # Min area threshold
@@ -1533,30 +1533,30 @@ def detect_shape_color():
                 
                 # Get color
                 avg_color = get_avg_color(c_orig, image)
-            color_name = closest_color(avg_color)
-            hex_color = '#{:02x}{:02x}{:02x}'.format(avg_color[0], avg_color[1], avg_color[2])
-            
+                color_name = closest_color(avg_color)
+                hex_color = '#{:02x}{:02x}{:02x}'.format(avg_color[0], avg_color[1], avg_color[2])
+                
                 # Calculate size
-                pixel_size, dimensions, area_mm2 = calculate_shape_size(shape, c, img_width)
+                measurements = calculate_shape_size(shape, c, img_width)
                 
                 # Create result object
-            result = {
-                'shape': shape,
-                'color': color_name,
-                'hex': hex_color,
-                    'dimensions': dimensions,
-                    'area_mm2': area_mm2
-            }
-            
-            results.append(result)
-            
+                result = {
+                    'shape': shape,
+                    'color': color_name,
+                    'hex': hex_color,
+                    'dimensions': measurements['dimension_text'],
+                    'area_mm2': measurements['area_mm2']
+                }
+                
+                results.append(result)
+                
                 # Draw on output image
                 cv2.drawContours(output, [c_orig], -1, (0, 255, 0), 2)
                 cv2.putText(output, shape, (cX, cY - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
                 cv2.putText(output, color_name, (cX, cY + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
                 
                 # Add dimension text
-                cv2.putText(output, dimensions, (cX, cY + 45), 
+                cv2.putText(output, measurements['dimension_text'], (cX, cY + 45), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
                 
                 # Draw a small color swatch
@@ -1582,15 +1582,15 @@ def detect_shape_color():
             
             # Save the result
             output_filename = f"combined_{filename}"
-        output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_filename)
+            output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_filename)
             cv2.imwrite(output_path, output)
-        
-        return jsonify({
-            'success': True,
-            'results': results,
-            'processedImage': '/static/uploads/' + output_filename
-        })
-        
+            
+            return jsonify({
+                'success': True,
+                'results': results,
+                'processedImage': '/static/uploads/' + output_filename
+            })
+            
     except Exception as e:
         error_trace = traceback.format_exc()
         print(f"Error in combined detection: {str(e)}\n{error_trace}")
